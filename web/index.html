@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Central de Guias Patrimoniais</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="startup-overlay" id="startup-overlay" aria-hidden="true">
+    <video
+      class="startup-overlay__video"
+      src="./assets/loading-bg.webm"
+      data-fallback="./assets/loading-bg.mp4"
+      type="video/webm"
+      autoplay
+      muted
+      loop
+      webkit-playsinline
+      playsinline
+      preload="auto"
+    ></video>
+    <div class="startup-overlay__content">
+      <div class="startup-overlay__eyebrow">Sistema Patrimonial</div>
+      <h2 class="startup-overlay__title">Agilidade com impressão.</h2>
+      <div class="startup-overlay__credit">Feito por Luiz Vieira</div>
+      <div class="startup-overlay__loader" aria-hidden="true">
+        <span></span>
+        <span></span>
+        <span></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="app-shell app-shell--compact">
+    <div class="ambient ambient--one"></div>
+    <div class="ambient ambient--two"></div>
+    <div class="ambient ambient--grid"></div>
+
+    <header class="hero">
+      <div class="hero__halo"></div>
+      <div class="hero__content">
+        <section class="hero__copy">
+          <div class="hero__eyebrow">Central interna de operação patrimonial</div>
+          <h1>Central de guias patrimoniais.</h1>
+          <p>
+            Preencha, valide pela base de móveis e envie para impressão sem abrir o Word.
+            Tudo em um fluxo direto e visual
+          </p>
+
+          <div class="hero-base">
+            <div class="hero-base__label">Base conectada</div>
+            <div class="hero-base__content">
+              <strong>Base de móveis</strong>
+              <span class="inventory-indicator" id="inventory-status">-</span>
+            </div>
+          </div>
+
+          <div class="hero__microcopy">
+            <span>Preenchimento inteligente</span>
+            <span>Base automática</span>
+            <span>Impressão imediata</span>
+          </div>
+        </section>
+
+        <section class="hero__side">
+          <div class="hero__chips">
+            <span class="chip">Word preservado</span>
+            <span class="chip">Base automática</span>
+            <span class="chip">Desktop app</span>
+          </div>
+
+          <div class="hero__panel">
+            <div class="hero__panel-top">
+              <div>
+                <div class="hero__panel-label">Workspace</div>
+                <div class="hero__panel-title">Painel de emissão</div>
+              </div>
+              <div class="hero__panel-badge">Live</div>
+            </div>
+            <div class="hero__panel-grid">
+              <div>
+                <strong>Entrega</strong>
+                <span>UA receptora, sala e itens</span>
+              </div>
+              <div>
+                <strong>Recebimento</strong>
+                <span>UA remetente com retorno rápido</span>
+              </div>
+              <div>
+                <strong>Base</strong>
+                <span>Descrição automática por chapa</span>
+              </div>
+              <div>
+                <strong>Saída</strong>
+                <span>Impressão com menos etapas</span>
+              </div>
+            </div>
+          </div>
+
+          <section class="hero-print" id="print-card">
+            <div class="hero-print__head">
+              <div>
+                <div class="hero-print__label">Impressão</div>
+                <div class="hero-print__meta">Escolha a impressora e as cópias.</div>
+              </div>
+              <button class="card__toggle card__toggle--hero" type="button" data-collapse-target="print-card" aria-expanded="true">Ocultar</button>
+            </div>
+            <div class="card__body">
+              <div class="hero-print__grid">
+                <label class="field field--grow">
+                  <span>Impressora</span>
+                  <div class="field__row">
+                    <select id="printer-select"></select>
+                    <button class="btn btn--ghost" id="refresh-printers" type="button">Atualizar</button>
+                  </div>
+                </label>
+                <label class="field field--small">
+                  <span>Cópias</span>
+                  <input id="copies-input" type="number" min="1" value="1" />
+                </label>
+              </div>
+              <label class="toggle-field">
+                <input id="allow-modifiable-guides" type="checkbox" />
+                <span>Permitir guia modificável</span>
+              </label>
+            </div>
+          </section>
+        </section>
+      </div>
+
+      <section class="hero-guide-floating" id="hero-guide">
+        <div class="hero-guide-floating__title">Próximos passos</div>
+        <div class="hero-guide-floating__list">
+          <div class="hero-guide-step" data-guide-step="flow">
+            <span class="hero-guide-step__dot"></span>
+            <span>1. Escolha o fluxo</span>
+          </div>
+          <div class="hero-guide-step" data-guide-step="core">
+            <span class="hero-guide-step__dot"></span>
+            <span>2. Preencha UA e sala</span>
+          </div>
+          <div class="hero-guide-step" data-guide-step="items">
+            <span class="hero-guide-step__dot"></span>
+            <span>3. Adicione itens e imprima</span>
+          </div>
+        </div>
+      </section>
+
+      <div class="hero__motion">
+        <span></span>
+        <span></span>
+        <span></span>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="workspace-grid">
+        <section class="workspace-toolbar card card--span-2">
+          <div class="toolbar-group toolbar-group--mode">
+            <div class="toolbar-label">Fluxo de emissão</div>
+            <div class="segmented segmented--hero" id="mode-switcher">
+              <span class="segmented__thumb" aria-hidden="true"></span>
+              <button type="button" class="segmented__item is-active" data-mode="ambos">Gerar os dois</button>
+              <button type="button" class="segmented__item" data-mode="entrega">Somente entrega</button>
+              <button type="button" class="segmented__item" data-mode="recebimento">Somente recebimento</button>
+            </div>
+          </div>
+          <div class="toolbar-note">Escolha rapidamente qual guia vai montar agora.</div>
+        </section>
+
+        <section class="card card--delivery mode-block" id="delivery-block">
+          <div class="card__head">
+            <div>
+              <div class="card__title">Entrega</div>
+              <div class="card__meta">Dados que alimentam a guia de entrega.</div>
+            </div>
+            <button class="card__toggle" type="button" data-collapse-target="delivery-block" aria-expanded="true">Ocultar</button>
+          </div>
+          <div class="card__body">
+            <div class="field-grid">
+              <label class="field">
+                <span>UA Receptora</span>
+                <input id="delivery-receiver-unit" type="text" />
+              </label>
+              <label class="field">
+                <span>Sala</span>
+                <input id="delivery-room" type="text" />
+              </label>
+            </div>
+          </div>
+        </section>
+
+        <section class="card card--receipt mode-block" id="receipt-block">
+          <div class="card__head">
+            <div>
+              <div class="card__title">Recebimento</div>
+              <div class="card__meta">Dados que alimentam a guia de recebimento.</div>
+            </div>
+            <button class="card__toggle" type="button" data-collapse-target="receipt-block" aria-expanded="true">Ocultar</button>
+          </div>
+          <div class="card__body">
+            <div class="field-grid">
+              <label class="field">
+                <span>UA Remetente</span>
+                <input id="receipt-sender-unit" type="text" />
+              </label>
+              <label class="field">
+                <span>Sala</span>
+                <input id="receipt-room" type="text" />
+              </label>
+            </div>
+          </div>
+        </section>
+
+        <section class="card card--items card--items-delivery items-block mode-block" id="delivery-items-block">
+          <div class="card__head">
+            <div>
+              <div class="card__title">Itens da entrega</div>
+              <div class="card__meta"><span id="delivery-count">0/21</span> linhas disponíveis</div>
+            </div>
+            <div class="card__actions">
+              <button class="btn btn--ghost" id="delivery-add" type="button">Adicionar</button>
+              <button class="btn btn--ghost" id="delivery-remove" type="button">Remover última</button>
+              <button class="card__toggle" type="button" data-collapse-target="delivery-items-block" aria-expanded="true">Ocultar</button>
+            </div>
+          </div>
+          <div class="card__body">
+            <div class="items-header">
+              <span>Número de patrimônio</span>
+              <span>Descrição do item</span>
+            </div>
+            <div class="items-list" id="delivery-items"></div>
+          </div>
+        </section>
+
+        <section class="card card--items card--items-receipt items-block mode-block" id="receipt-items-block">
+          <div class="card__head">
+            <div>
+              <div class="card__title">Itens do recebimento</div>
+              <div class="card__meta"><span id="receipt-count">0/21</span> linhas disponíveis</div>
+            </div>
+            <div class="card__actions">
+              <button class="btn btn--ghost" id="receipt-add" type="button">Adicionar</button>
+              <button class="btn btn--ghost" id="receipt-remove" type="button">Remover última</button>
+              <button class="card__toggle" type="button" data-collapse-target="receipt-items-block" aria-expanded="true">Ocultar</button>
+            </div>
+          </div>
+          <div class="card__body">
+            <div class="items-header">
+              <span>Número de patrimônio</span>
+              <span>Descrição do item</span>
+            </div>
+            <div class="items-list" id="receipt-items"></div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <footer class="actionbar">
+      <div class="actionbar__meta">
+        <div class="status" id="status-text">Carregando interface...</div>
+        <div class="actionbar__credit">Feito por Luiz Vieira</div>
+      </div>
+      <div class="actionbar__buttons">
+        <button class="btn btn--ghost" id="clear-items" type="button">Limpar itens</button>
+        <button class="btn btn--primary" id="print-button" type="button">Imprimir</button>
+      </div>
+    </footer>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script src="./app.js"></script>
+</body>
+</html>
