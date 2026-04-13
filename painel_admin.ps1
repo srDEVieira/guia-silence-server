@@ -85,11 +85,16 @@ function Confirm-Action([string]$Prompt) {
     return ($answer -match "^(s|sim|y|yes)$")
 }
 
-function Invoke-AdminApi([string]$Method, [string]$Path) {
+function Invoke-AdminApi([string]$Method, [string]$Path, [string]$Body = "") {
     $uri = "$($script:BaseUrl)$Path"
     $headers = @{ "X-Admin-Token" = $script:AdminToken }
     try {
-        $response = Invoke-WebRequest -Method $Method -Uri $uri -Headers $headers -UseBasicParsing
+        if ([string]::IsNullOrWhiteSpace($Body)) {
+            $response = Invoke-WebRequest -Method $Method -Uri $uri -Headers $headers -UseBasicParsing
+        } else {
+            $headers["Content-Type"] = "application/json"
+            $response = Invoke-WebRequest -Method $Method -Uri $uri -Headers $headers -Body $Body -UseBasicParsing
+        }
     }
     catch {
         $details = $_.Exception.Message
@@ -265,6 +270,172 @@ function Export-DevicesCsv {
     Write-Host ""
 }
 
+function Get-Profiles {
+    try {
+        $resp = Invoke-AdminApi -Method "GET" -Path "/admin/profiles"
+        if ($null -eq $resp -or $null -eq $resp.profiles) {
+            return @()
+        }
+        return @($resp.profiles)
+    }
+    catch {
+        Write-Host ""
+        Write-Host "Falha ao consultar perfis." -ForegroundColor Red
+        Write-Host $_ -ForegroundColor Red
+        Write-Host ""
+        return @()
+    }
+}
+
+function Show-Profiles {
+    $profiles = Get-Profiles
+    if ($profiles.Count -eq 0) {
+        Write-Host "Total de perfis: 0" -ForegroundColor Cyan
+        Write-Host "Nenhum perfil cadastrado." -ForegroundColor Yellow
+        return @()
+    }
+
+    $table = @(
+        for ($i = 0; $i -lt $profiles.Count; $i++) {
+            $p = $profiles[$i]
+            [PSCustomObject]@{
+                idx          = $i + 1
+                profile_id   = [string]$p.profile_id
+                display_name = [string]$p.display_name
+                active       = [bool]$p.active
+                sort_order   = [int]($p.sort_order)
+                accent_color = [string]$p.accent_color
+                hero_bg_url  = [string]$p.hero_bg_url
+            }
+        }
+    )
+
+    $activeCount = @($table | Where-Object { $_.active }).Count
+    Write-Host ("Total de perfis: " + $table.Count) -ForegroundColor Cyan
+    Write-Host ("Ativos: $activeCount") -ForegroundColor DarkCyan
+    $table | Sort-Object -Property sort_order, display_name | Format-Table -AutoSize | Out-Host
+    return $table
+}
+
+function Resolve-ProfileId($profilesTable) {
+    $inputValue = Read-Host "Digite o idx da tabela ou o profile_id"
+    if ([string]::IsNullOrWhiteSpace($inputValue)) { return "" }
+
+    $inputValue = $inputValue.Trim()
+    if ($inputValue -match "^\d+$") {
+        $idx = [int]$inputValue
+        $row = $profilesTable | Where-Object { $_.idx -eq $idx } | Select-Object -First 1
+        if ($null -ne $row) { return [string]$row.profile_id }
+        Write-Host "idx invalido." -ForegroundColor Yellow
+        return ""
+    }
+    return $inputValue
+}
+
+function Add-Profile {
+    $displayName = Read-NonEmpty "Nome do perfil"
+    $heroBgUrl = Read-Host "URL do plano de fundo (opcional)"
+    $accentColor = Read-Host "Cor de destaque (hex, opcional. ex: #114c78)"
+    $sortOrderRaw = Read-Host "Ordem (numero inteiro, default 0)"
+    $activeAnswer = Read-Host "Perfil ativo? (S/n)"
+    $active = -not ($activeAnswer -match "^(n|nao|não)$")
+
+    $sortOrder = 0
+    if (-not [string]::IsNullOrWhiteSpace($sortOrderRaw)) {
+        [void][int]::TryParse($sortOrderRaw, [ref]$sortOrder)
+    }
+
+    $payload = @{
+        display_name = $displayName
+        hero_bg_url  = [string]$heroBgUrl
+        accent_color = [string]$accentColor
+        sort_order   = $sortOrder
+        active       = $active
+    } | ConvertTo-Json
+
+    try {
+        [void](Invoke-AdminApi -Method "POST" -Path "/admin/profiles" -Body $payload)
+        Write-Host ""
+        Write-Host "Perfil criado com sucesso." -ForegroundColor Green
+        Write-Host ""
+    }
+    catch {
+        Write-Host ""
+        Write-Host "Falha ao criar perfil." -ForegroundColor Red
+        Write-Host $_ -ForegroundColor Red
+        Write-Host ""
+    }
+}
+
+function Edit-Profile {
+    $table = Show-Profiles
+    if ($table.Count -eq 0) { return }
+    $profileId = Resolve-ProfileId -profilesTable $table
+    if ([string]::IsNullOrWhiteSpace($profileId)) { return }
+
+    $current = $table | Where-Object { $_.profile_id -eq $profileId } | Select-Object -First 1
+    if ($null -eq $current) {
+        Write-Host "Perfil nao encontrado na tabela." -ForegroundColor Yellow
+        return
+    }
+
+    $displayName = Read-Host "Nome do perfil [$($current.display_name)]"
+    if ([string]::IsNullOrWhiteSpace($displayName)) { $displayName = $current.display_name }
+    $heroBgUrl = Read-Host "URL do plano de fundo [$($current.hero_bg_url)]"
+    if ([string]::IsNullOrWhiteSpace($heroBgUrl)) { $heroBgUrl = $current.hero_bg_url }
+    $accentColor = Read-Host "Cor de destaque [$($current.accent_color)]"
+    if ([string]::IsNullOrWhiteSpace($accentColor)) { $accentColor = $current.accent_color }
+    $sortOrderRaw = Read-Host "Ordem [$($current.sort_order)]"
+    $sortOrder = [int]$current.sort_order
+    if (-not [string]::IsNullOrWhiteSpace($sortOrderRaw)) {
+        [void][int]::TryParse($sortOrderRaw, [ref]$sortOrder)
+    }
+    $activeAnswer = Read-Host "Perfil ativo? (S/n) [$(if($current.active){'S'}else{'N'})]"
+    $active = if ([string]::IsNullOrWhiteSpace($activeAnswer)) { [bool]$current.active } else { -not ($activeAnswer -match "^(n|nao|não)$") }
+
+    $payload = @{
+        display_name = [string]$displayName
+        hero_bg_url  = [string]$heroBgUrl
+        accent_color = [string]$accentColor
+        sort_order   = $sortOrder
+        active       = $active
+    } | ConvertTo-Json
+
+    try {
+        [void](Invoke-AdminApi -Method "PUT" -Path "/admin/profiles/$profileId" -Body $payload)
+        Write-Host ""
+        Write-Host "Perfil atualizado com sucesso." -ForegroundColor Green
+        Write-Host ""
+    }
+    catch {
+        Write-Host ""
+        Write-Host "Falha ao atualizar perfil." -ForegroundColor Red
+        Write-Host $_ -ForegroundColor Red
+        Write-Host ""
+    }
+}
+
+function Remove-Profile {
+    $table = Show-Profiles
+    if ($table.Count -eq 0) { return }
+    $profileId = Resolve-ProfileId -profilesTable $table
+    if ([string]::IsNullOrWhiteSpace($profileId)) { return }
+    if (-not (Confirm-Action "Confirmar exclusao de perfil '$profileId'?")) { return }
+
+    try {
+        [void](Invoke-AdminApi -Method "DELETE" -Path "/admin/profiles/$profileId")
+        Write-Host ""
+        Write-Host "Perfil excluido com sucesso." -ForegroundColor Green
+        Write-Host ""
+    }
+    catch {
+        Write-Host ""
+        Write-Host "Falha ao excluir perfil." -ForegroundColor Red
+        Write-Host $_ -ForegroundColor Red
+        Write-Host ""
+    }
+}
+
 function Edit-Settings {
     $script:BaseUrl = Read-NonEmpty "URL do servidor" $script:BaseUrl
     $script:AdminToken = Read-NonEmpty "ADMIN_TOKEN" $script:AdminToken
@@ -295,6 +466,10 @@ while ($true) {
     Write-Host "4) Alterar URL / TOKEN"
     Write-Host "5) Testar conexao"
     Write-Host "6) Exportar dispositivos (CSV)"
+    Write-Host "7) Listar perfis"
+    Write-Host "8) Adicionar perfil"
+    Write-Host "9) Editar perfil"
+    Write-Host "10) Excluir perfil"
     Write-Host "0) Sair"
     Write-Host ""
 
@@ -317,6 +492,10 @@ while ($true) {
             Pause
         }
         "6" { Write-Host ""; Export-DevicesCsv; Pause }
+        "7" { Write-Host ""; Show-Profiles; Write-Host ""; Pause }
+        "8" { Write-Host ""; Add-Profile; Pause }
+        "9" { Write-Host ""; Edit-Profile; Pause }
+        "10" { Write-Host ""; Remove-Profile; Pause }
         "0" { break }
         default {
             Write-Host ""

@@ -20,6 +20,8 @@ app = FastAPI(title="Guia License Server", version="1.3.0")
 DB_PATH = Path("devices.json")
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+INVENTORY_BASE_URL = os.getenv("INVENTORY_BASE_URL", "").strip()
+INVENTORY_VERSION = os.getenv("INVENTORY_VERSION", "").strip()
 
 
 def now_iso() -> str:
@@ -264,6 +266,15 @@ def register(payload: dict[str, Any]) -> dict[str, Any]:
 @app.get("/profiles")
 def public_profiles() -> dict[str, Any]:
     return {"ok": True, "profiles": get_profiles_data(include_inactive=False)}
+
+
+@app.get("/inventory/meta")
+def inventory_meta() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "version": INVENTORY_VERSION or "",
+        "url": INVENTORY_BASE_URL or "",
+    }
 
 
 @app.get("/admin/profiles")

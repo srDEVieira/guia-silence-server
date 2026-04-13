@@ -8,8 +8,12 @@ import urllib.parse
 import urllib.request
 from datetime import datetime
 from pathlib import Path
-import tkinter as tk
-from tkinter import messagebox, simpledialog, ttk
+
+tk = None
+ttk = None
+messagebox = None
+simpledialog = None
+colorchooser = None
 
 
 ROOT_DIR = Path(__file__).resolve().parent
@@ -34,6 +38,18 @@ def _ensure_tk_runtime() -> None:
             os.environ.setdefault("TCL_LIBRARY", str(tcl_dir))
             os.environ.setdefault("TK_LIBRARY", str(tk_dir))
             return
+
+
+def _import_tk() -> None:
+    global tk, ttk, messagebox, simpledialog, colorchooser
+    import tkinter as _tk
+    from tkinter import colorchooser as _colorchooser, messagebox as _messagebox, simpledialog as _simpledialog, ttk as _ttk
+
+    tk = _tk
+    ttk = _ttk
+    messagebox = _messagebox
+    simpledialog = _simpledialog
+    colorchooser = _colorchooser
 
 
 class AdminPanelApp:
@@ -99,8 +115,8 @@ class AdminPanelApp:
         ttk.Button(actions, text="Desbloquear", command=self._unblock_selected).pack(side="left")
         ttk.Button(actions, text="Exportar CSV", command=self._export_devices_csv).pack(side="right")
 
-        table_wrap = tk.Frame(self.tab_devices, bg="#f8fafc", padx=12, pady=(0, 12))
-        table_wrap.pack(fill="both", expand=True)
+        table_wrap = tk.Frame(self.tab_devices, bg="#f8fafc", padx=12, pady=0)
+        table_wrap.pack(fill="both", expand=True, pady=(0, 12))
 
         columns = ("device_id", "machine_name", "user_name", "blocked", "last_seen")
         self.devices_tree = ttk.Treeview(table_wrap, columns=columns, show="headings")
@@ -132,8 +148,8 @@ class AdminPanelApp:
         ttk.Button(actions, text="Editar", command=self._edit_profile).pack(side="left")
         ttk.Button(actions, text="Excluir", command=self._delete_profile).pack(side="left", padx=8)
 
-        table_wrap = tk.Frame(self.tab_profiles, bg="#f8fafc", padx=12, pady=(0, 12))
-        table_wrap.pack(fill="both", expand=True)
+        table_wrap = tk.Frame(self.tab_profiles, bg="#f8fafc", padx=12, pady=0)
+        table_wrap.pack(fill="both", expand=True, pady=(0, 12))
 
         columns = ("profile_id", "display_name", "active", "sort_order", "accent_color", "hero_bg_url")
         self.profiles_tree = ttk.Treeview(table_wrap, columns=columns, show="headings")
@@ -358,14 +374,14 @@ class AdminPanelApp:
         )
         if bg_url is None:
             return None
-        accent = simpledialog.askstring(
-            title,
-            "Cor de destaque (hex, opcional. ex: #114c78):",
-            initialvalue=str(current.get("accent_color", "")),
+        accent_current = str(current.get("accent_color", "")).strip()
+        accent_initial = accent_current or "#114c78"
+        picked_color = colorchooser.askcolor(
+            color=accent_initial,
+            title=f"{title} - Escolha a cor de destaque",
             parent=self.root,
-        )
-        if accent is None:
-            return None
+        )[1]
+        accent = picked_color if picked_color else accent_current
         sort_order_raw = simpledialog.askstring(
             title,
             "Ordem (numero inteiro):",
@@ -441,6 +457,7 @@ class AdminPanelApp:
 
 def main() -> None:
     _ensure_tk_runtime()
+    _import_tk()
     root = tk.Tk()
     style = ttk.Style(root)
     try:

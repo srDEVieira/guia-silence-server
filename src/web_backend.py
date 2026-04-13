@@ -24,6 +24,8 @@ class GuideAppApi:
     LICENSE_RECHECK_SECONDS = 8
     LICENSE_BACKGROUND_POLL_SECONDS = 6
     LICENSE_TIMEOUT_SECONDS = 3
+    INVENTORY_SYNC_SECONDS = 120
+    INVENTORY_META_TIMEOUT_SECONDS = 5
 
     def __init__(self, base_dir: Path | None = None) -> None:
         self.base_dir = (base_dir or Path.cwd()).resolve()
@@ -34,6 +36,8 @@ class GuideAppApi:
         self.inventory_lookup: dict[str, str] = {}
         self._inventory_ready = False
         self._inventory_lock = threading.Lock()
+        self._inventory_version_path = self.base_dir / ".inventory_version.json"
+        self._inventory_local_version = self._load_inventory_local_version()
 
         self._printers_cache: list[str] = []
         self._default_printer_cache = ""
@@ -57,6 +61,7 @@ class GuideAppApi:
         self._print_worker.start()
 
         threading.Thread(target=self._load_inventory_lookup_background, daemon=True).start()
+        threading.Thread(target=self._inventory_sync_loop, daemon=True).start()
         threading.Thread(target=self._refresh_printer_cache, daemon=True).start()
         threading.Thread(target=self._warmup_word_automation_background, daemon=True).start()
         threading.Thread(target=self._refresh_license_status, kwargs={"force": True}, daemon=True).start()
@@ -201,6 +206,7 @@ class GuideAppApi:
             return {}
 
     def _load_inventory_lookup_background(self) -> None:
+        self._sync_inventory_from_remote(force=True)
         lookup = self._load_inventory_lookup()
         with self._inventory_lock:
             self.inventory_lookup = lookup
@@ -219,6 +225,14 @@ class GuideAppApi:
             self._docx_tools().warmup_word_automation()
         except Exception:
             pass
+
+    def _inventory_sync_loop(self) -> None:
+        while True:
+            try:
+                self._sync_inventory_from_remote(force=False)
+            except Exception:
+                pass
+            time.sleep(self.INVENTORY_SYNC_SECONDS)
 
     def _license_poll_loop(self) -> None:
         while True:
@@ -403,6 +417,71 @@ class GuideAppApi:
             "machine_name": machine_name,
             "user_name": user_name,
         }
+
+    def _load_inventory_local_version(self) -> str:
+        if not self._inventory_version_path.is_file():
+            return ""
+        try:
+            data = json.loads(self._inventory_version_path.read_text(encoding="utf-8"))
+        except Exception:
+            return ""
+        return str(data.get("version", "")).strip()
+
+    def _save_inventory_local_version(self, version: str) -> None:
+        payload = {"version": version.strip()}
+        try:
+            self._inventory_version_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            self._inventory_local_version = version.strip()
+        except Exception:
+            pass
+
+    def _sync_inventory_from_remote(self, *, force: bool) -> None:
+        if not self.license_server_url:
+            return
+
+        meta_url = f"{self.license_server_url}/inventory/meta"
+        req = request.Request(meta_url, method="GET")
+        try:
+            with request.urlopen(req, timeout=self.INVENTORY_META_TIMEOUT_SECONDS) as resp:
+                raw = resp.read().decode("utf-8")
+                data = json.loads(raw or "{}")
+        except Exception:
+            return
+
+        remote_version = str(data.get("version", "")).strip()
+        remote_url = str(data.get("url", "")).strip()
+        if not remote_url or not remote_version:
+            return
+        if not force and remote_version == self._inventory_local_version:
+            return
+
+        temp_target = self.base_dir / "base_moveis_tmp_download.xls"
+        try:
+            with request.urlopen(remote_url, timeout=self.INVENTORY_META_TIMEOUT_SECONDS + 5) as resp:
+                content = resp.read()
+            if not content:
+                return
+            temp_target.write_bytes(content)
+            # Replace atomically only after successful download.
+            temp_target.replace(self.inventory_base)
+        except Exception:
+            try:
+                if temp_target.exists():
+                    temp_target.unlink()
+            except Exception:
+                pass
+            return
+
+        lookup = self._load_inventory_lookup()
+        with self._inventory_lock:
+            self.inventory_lookup = lookup
+            self._inventory_ready = True
+
+        if remote_version:
+            self._save_inventory_local_version(remote_version)
 
     def _load_license_cache(self) -> None:
         if not self._license_cache_path.is_file():
