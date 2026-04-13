@@ -8,6 +8,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 tk = None
 ttk = None
@@ -63,6 +64,8 @@ class AdminPanelApp:
         self.token_var = tk.StringVar()
         self.status_var = tk.StringVar(value="Status: nao testado")
         self.total_var = tk.StringVar(value="Dispositivos: 0 | Perfis: 0")
+        self.device_filter_var = tk.StringVar()
+        self._devices_cache: list[dict[str, Any]] = []
 
         self._build_ui()
         self._load_config()
@@ -110,6 +113,10 @@ class AdminPanelApp:
     def _build_devices_tab(self) -> None:
         actions = tk.Frame(self.tab_devices, bg="#f8fafc", padx=12, pady=10)
         actions.pack(fill="x")
+        tk.Label(actions, text="Buscar:", bg="#f8fafc", fg="#475569").pack(side="left", padx=(0, 6))
+        filter_entry = tk.Entry(actions, textvariable=self.device_filter_var, width=28)
+        filter_entry.pack(side="left", padx=(0, 10))
+        filter_entry.bind("<KeyRelease>", lambda _e: self._apply_device_filter())
         ttk.Button(actions, text="Atualizar", command=self._refresh_devices).pack(side="left")
         ttk.Button(actions, text="Bloquear", command=self._block_selected).pack(side="left", padx=8)
         ttk.Button(actions, text="Desbloquear", command=self._unblock_selected).pack(side="left")
@@ -118,13 +125,14 @@ class AdminPanelApp:
         table_wrap = tk.Frame(self.tab_devices, bg="#f8fafc", padx=12, pady=0)
         table_wrap.pack(fill="both", expand=True, pady=(0, 12))
 
-        columns = ("device_id", "machine_name", "user_name", "blocked", "last_seen")
-        self.devices_tree = ttk.Treeview(table_wrap, columns=columns, show="headings")
+        columns = ("device_id", "machine_name", "user_name", "blocked", "block_reason", "last_seen")
+        self.devices_tree = ttk.Treeview(table_wrap, columns=columns, show="headings", selectmode="extended")
         for col, text, width in (
             ("device_id", "Device ID", 280),
             ("machine_name", "Maquina", 180),
             ("user_name", "Usuario", 150),
             ("blocked", "Bloqueado", 100),
+            ("block_reason", "Motivo", 220),
             ("last_seen", "Ultimo acesso", 220),
         ):
             self.devices_tree.heading(col, text=text)
@@ -249,7 +257,8 @@ class AdminPanelApp:
         try:
             data = self._request("GET", "/admin/devices")
             devices = data.get("devices", []) or []
-            self._populate_devices(devices)
+            self._devices_cache = list(devices)
+            self._apply_device_filter()
             self._set_status("dispositivos atualizados", True)
         except Exception as exc:
             self._populate_devices([])
@@ -280,12 +289,29 @@ class AdminPanelApp:
                     d.get("machine_name", ""),
                     d.get("user_name", ""),
                     "Sim" if blocked else "Nao",
+                    d.get("block_reason", ""),
                     d.get("last_seen", ""),
                 ),
                 tags=("blocked",) if blocked else ("active",),
             )
         self.devices_tree.tag_configure("blocked", foreground="#ef4444")
         self.devices_tree.tag_configure("active", foreground="#15803d")
+
+    def _apply_device_filter(self) -> None:
+        raw = self.device_filter_var.get().strip().lower()
+        if not raw:
+            self._populate_devices(self._devices_cache)
+            self._update_totals()
+            return
+        filtered = [
+            d for d in self._devices_cache
+            if raw in str(d.get("device_id", "")).lower()
+            or raw in str(d.get("machine_name", "")).lower()
+            or raw in str(d.get("user_name", "")).lower()
+            or raw in str(d.get("block_reason", "")).lower()
+        ]
+        self._populate_devices(filtered)
+        self._update_totals(filtered_count=len(filtered))
 
     def _populate_profiles(self, profiles: list[dict]) -> None:
         for iid in self.profiles_tree.get_children():
@@ -304,32 +330,55 @@ class AdminPanelApp:
                 ),
             )
 
-    def _update_totals(self) -> None:
+    def _update_totals(self, *, filtered_count: int | None = None) -> None:
+        devices_count = filtered_count if filtered_count is not None else len(self.devices_tree.get_children())
         self.total_var.set(
-            f"Dispositivos: {len(self.devices_tree.get_children())} | Perfis: {len(self.profiles_tree.get_children())}"
+            f"Dispositivos: {devices_count} | Perfis: {len(self.profiles_tree.get_children())}"
         )
 
-    def _selected_device_id(self) -> str:
+    def _selected_device_ids(self) -> list[str]:
         selected = self.devices_tree.selection()
         if not selected:
-            return ""
-        return str(self.devices_tree.item(selected[0], "values")[0])
+            return []
+        result: list[str] = []
+        for row_id in selected:
+            values = self.devices_tree.item(row_id, "values")
+            if values and values[0]:
+                result.append(str(values[0]))
+        return result
 
     def _change_block(self, block: bool) -> None:
-        device_id = self._selected_device_id()
-        if not device_id:
-            messagebox.showwarning("Painel Admin", "Selecione um dispositivo.")
+        device_ids = self._selected_device_ids()
+        if not device_ids:
+            messagebox.showwarning("Painel Admin", "Selecione um ou mais dispositivos.")
             return
         action = "bloquear" if block else "desbloquear"
-        if not messagebox.askyesno("Confirmacao", f"Deseja {action}?\n\n{device_id}"):
+        reason = ""
+        if block:
+            reason_value = simpledialog.askstring(
+                "Motivo do bloqueio",
+                "Informe o motivo (opcional):",
+                parent=self.root,
+            )
+            if reason_value is None:
+                return
+            reason = reason_value.strip()
+        if not messagebox.askyesno("Confirmacao", f"Deseja {action} {len(device_ids)} dispositivo(s)?"):
             return
-        path = f"/admin/block/{urllib.parse.quote(device_id)}" if block else f"/admin/unblock/{urllib.parse.quote(device_id)}"
-        try:
-            self._request("POST", path)
-            self._refresh_devices()
-            self._set_status(f"dispositivo {action}ado", True)
-        except Exception as exc:
-            self._set_status(str(exc), False)
+        ok_count = 0
+        for device_id in device_ids:
+            path = f"/admin/block/{urllib.parse.quote(device_id)}" if block else f"/admin/unblock/{urllib.parse.quote(device_id)}"
+            try:
+                payload = {"reason": reason} if block else None
+                self._request("POST", path, body=payload)
+                ok_count += 1
+            except Exception:
+                continue
+        self._refresh_devices()
+        if ok_count:
+            self._set_status(f"{ok_count} dispositivo(s) {action}ado(s)", True)
+        else:
+            self._set_status(f"Nao foi possivel {action} os dispositivos selecionados.", False)
 
     def _block_selected(self) -> None:
         self._change_block(True)

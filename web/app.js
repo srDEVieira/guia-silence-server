@@ -9,6 +9,7 @@ const state = {
   licenseHeartbeatId: null,
   profiles: [],
   activeProfileId: '',
+  themeTransitionTimer: null,
   autosaveTimer: null,
   collapsedCards: new Set(),
   printHistory: [],
@@ -275,14 +276,133 @@ function renderProfiles() {
 }
 
 function applyProfileTheme(profile) {
+  startThemeTransition();
   const defaultHero = 'url("./assets/tai_lung__kung_fu_panda____wallpaper___g3anzera_by_reysosen_dfz4k15.png")';
   const heroBgUrl = profile && profile.hero_bg_url ? profile.hero_bg_url : '';
-  const accentColor = profile && profile.accent_color ? profile.accent_color : '#114c78';
+  const accentColor = normalizeHexColor(profile && profile.accent_color ? profile.accent_color : '#114c78');
+  const accentRgb = hexToRgb(accentColor);
+  const accentStrong = rgbToHex(adjustLightness(accentRgb, -0.18));
+  const accentSoft = rgbToHex(adjustLightness(accentRgb, 0.35));
+
+  const accentHsl = rgbToHsl(accentRgb);
+  const deliveryRgb = hslToRgb(
+    (accentHsl.h - 42 + 360) % 360,
+    clamp01(accentHsl.s + 0.08),
+    clamp01(accentHsl.l + 0.02)
+  );
+  const receiptRgb = hslToRgb(
+    (accentHsl.h + 36) % 360,
+    clamp01(Math.max(0.35, accentHsl.s - 0.02)),
+    clamp01(Math.min(0.52, accentHsl.l - 0.04))
+  );
+  const deliveryHex = rgbToHex(deliveryRgb);
+  const receiptHex = rgbToHex(receiptRgb);
+
   document.documentElement.style.setProperty(
     '--hero-profile-image',
     heroBgUrl ? `url("${heroBgUrl.replaceAll('"', '\\"')}")` : defaultHero
   );
   document.documentElement.style.setProperty('--profile-accent', accentColor);
+  document.documentElement.style.setProperty('--accent', accentColor);
+  document.documentElement.style.setProperty('--accent-strong', accentStrong);
+  document.documentElement.style.setProperty('--accent-soft', accentSoft);
+  document.documentElement.style.setProperty('--delivery', deliveryHex);
+  document.documentElement.style.setProperty('--delivery-soft', `rgba(${deliveryRgb.r}, ${deliveryRgb.g}, ${deliveryRgb.b}, 0.14)`);
+  document.documentElement.style.setProperty('--receipt', receiptHex);
+  document.documentElement.style.setProperty('--receipt-soft', `rgba(${receiptRgb.r}, ${receiptRgb.g}, ${receiptRgb.b}, 0.14)`);
+  document.documentElement.style.setProperty('--accent-rgb', `${accentRgb.r}, ${accentRgb.g}, ${accentRgb.b}`);
+  document.documentElement.style.setProperty('--accent-strong-rgb', `${hexToRgb(accentStrong).r}, ${hexToRgb(accentStrong).g}, ${hexToRgb(accentStrong).b}`);
+  document.documentElement.style.setProperty('--delivery-rgb', `${deliveryRgb.r}, ${deliveryRgb.g}, ${deliveryRgb.b}`);
+  document.documentElement.style.setProperty('--receipt-rgb', `${receiptRgb.r}, ${receiptRgb.g}, ${receiptRgb.b}`);
+}
+
+function startThemeTransition() {
+  document.body.classList.add('theme-transition');
+  if (state.themeTransitionTimer) {
+    window.clearTimeout(state.themeTransitionTimer);
+  }
+  state.themeTransitionTimer = window.setTimeout(() => {
+    document.body.classList.remove('theme-transition');
+    state.themeTransitionTimer = null;
+  }, 520);
+}
+
+function normalizeHexColor(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '#114c78';
+  if (/^#[0-9a-fA-F]{6}$/.test(raw)) return raw.toLowerCase();
+  if (/^#[0-9a-fA-F]{3}$/.test(raw)) {
+    const r = raw[1];
+    const g = raw[2];
+    const b = raw[3];
+    return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
+  }
+  return '#114c78';
+}
+
+function hexToRgb(hex) {
+  const normalized = normalizeHexColor(hex);
+  return {
+    r: Number.parseInt(normalized.slice(1, 3), 16),
+    g: Number.parseInt(normalized.slice(3, 5), 16),
+    b: Number.parseInt(normalized.slice(5, 7), 16),
+  };
+}
+
+function rgbToHex(rgb) {
+  const toHex = (n) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0');
+  return `#${toHex(rgb.r)}${toHex(rgb.g)}${toHex(rgb.b)}`;
+}
+
+function rgbToHsl(rgb) {
+  const r = rgb.r / 255;
+  const g = rgb.g / 255;
+  const b = rgb.b / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (max === min) {
+    return { h: 0, s: 0, l };
+  }
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h;
+  switch (max) {
+    case r: h = ((g - b) / d + (g < b ? 6 : 0)); break;
+    case g: h = ((b - r) / d + 2); break;
+    default: h = ((r - g) / d + 4); break;
+  }
+  return { h: h * 60, s, l };
+}
+
+function hslToRgb(h, s, l) {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const hp = h / 60;
+  const x = c * (1 - Math.abs((hp % 2) - 1));
+  let r1 = 0;
+  let g1 = 0;
+  let b1 = 0;
+  if (hp >= 0 && hp < 1) { r1 = c; g1 = x; b1 = 0; }
+  else if (hp < 2) { r1 = x; g1 = c; b1 = 0; }
+  else if (hp < 3) { r1 = 0; g1 = c; b1 = x; }
+  else if (hp < 4) { r1 = 0; g1 = x; b1 = c; }
+  else if (hp < 5) { r1 = x; g1 = 0; b1 = c; }
+  else { r1 = c; g1 = 0; b1 = x; }
+  const m = l - c / 2;
+  return {
+    r: (r1 + m) * 255,
+    g: (g1 + m) * 255,
+    b: (b1 + m) * 255,
+  };
+}
+
+function adjustLightness(rgb, delta) {
+  const hsl = rgbToHsl(rgb);
+  return hslToRgb(hsl.h, hsl.s, clamp01(hsl.l + delta));
+}
+
+function clamp01(value) {
+  return Math.max(0, Math.min(1, value));
 }
 
 function fillPrinters(printers, defaultPrinter) {

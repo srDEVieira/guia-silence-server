@@ -59,11 +59,15 @@ def init_postgres() -> None:
                     machine_name TEXT NOT NULL DEFAULT '',
                     user_name TEXT NOT NULL DEFAULT '',
                     blocked BOOLEAN NOT NULL DEFAULT FALSE,
+                    block_reason TEXT NOT NULL DEFAULT '',
+                    blocked_at TIMESTAMPTZ NULL,
                     first_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
                 """
             )
+            cur.execute("ALTER TABLE devices ADD COLUMN IF NOT EXISTS block_reason TEXT NOT NULL DEFAULT ''")
+            cur.execute("ALTER TABLE devices ADD COLUMN IF NOT EXISTS blocked_at TIMESTAMPTZ NULL")
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS profiles (
@@ -237,7 +241,7 @@ def register(payload: dict[str, Any]) -> dict[str, Any]:
                         machine_name = EXCLUDED.machine_name,
                         user_name = EXCLUDED.user_name,
                         last_seen = NOW()
-                    RETURNING blocked
+                    RETURNING blocked, block_reason
                     """,
                     (device_id, machine_name, user_name),
                 )
@@ -245,7 +249,8 @@ def register(payload: dict[str, Any]) -> dict[str, Any]:
             conn.commit()
 
         blocked = bool(row[0]) if row else False
-        return {"ok": True, "device_id": device_id, "blocked": blocked}
+        block_reason = str(row[1] or "") if row else ""
+        return {"ok": True, "device_id": device_id, "blocked": blocked, "block_reason": block_reason}
 
     db = load_db()
     devices = db["devices"]
@@ -256,11 +261,18 @@ def register(payload: dict[str, Any]) -> dict[str, Any]:
         "machine_name": machine_name,
         "user_name": user_name,
         "blocked": blocked,
+        "block_reason": str(current.get("block_reason", "")),
+        "blocked_at": current.get("blocked_at"),
         "first_seen": current.get("first_seen", now_iso()),
         "last_seen": now_iso(),
     }
     save_db(db)
-    return {"ok": True, "device_id": device_id, "blocked": blocked}
+    return {
+        "ok": True,
+        "device_id": device_id,
+        "blocked": blocked,
+        "block_reason": str(devices[device_id].get("block_reason", "")),
+    }
 
 
 @app.get("/profiles")
@@ -408,7 +420,7 @@ def admin_devices(x_admin_token: str | None = Header(default=None)) -> dict[str,
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT device_id, machine_name, user_name, blocked, first_seen, last_seen
+                    SELECT device_id, machine_name, user_name, blocked, block_reason, blocked_at, first_seen, last_seen
                     FROM devices
                     ORDER BY last_seen DESC
                     """
@@ -420,8 +432,10 @@ def admin_devices(x_admin_token: str | None = Header(default=None)) -> dict[str,
                 "machine_name": r[1],
                 "user_name": r[2],
                 "blocked": bool(r[3]),
-                "first_seen": r[4].isoformat() if r[4] else None,
-                "last_seen": r[5].isoformat() if r[5] else None,
+                "block_reason": str(r[4] or ""),
+                "blocked_at": r[5].isoformat() if r[5] else None,
+                "first_seen": r[6].isoformat() if r[6] else None,
+                "last_seen": r[7].isoformat() if r[7] else None,
             }
             for r in rows
         ]
@@ -432,33 +446,40 @@ def admin_devices(x_admin_token: str | None = Header(default=None)) -> dict[str,
 
 
 @app.post("/admin/block/{device_id}")
-def admin_block(device_id: str, x_admin_token: str | None = Header(default=None)) -> dict[str, Any]:
+def admin_block(
+    device_id: str,
+    payload: dict[str, Any] | None = None,
+    x_admin_token: str | None = Header(default=None),
+) -> dict[str, Any]:
     require_admin(x_admin_token)
+    reason = str((payload or {}).get("reason", "")).strip()
     if using_postgres():
         with get_pg_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     UPDATE devices
-                    SET blocked = TRUE, last_seen = NOW()
+                    SET blocked = TRUE, block_reason = %s, blocked_at = NOW(), last_seen = NOW()
                     WHERE device_id = %s
                     RETURNING device_id
                     """,
-                    (device_id,),
+                    (reason, device_id),
                 )
                 row = cur.fetchone()
             conn.commit()
         if not row:
             raise HTTPException(status_code=404, detail="Dispositivo nao encontrado.")
-        return {"ok": True, "device_id": device_id, "blocked": True}
+        return {"ok": True, "device_id": device_id, "blocked": True, "block_reason": reason}
 
     db = load_db()
     if device_id not in db["devices"]:
         raise HTTPException(status_code=404, detail="Dispositivo nao encontrado.")
     db["devices"][device_id]["blocked"] = True
+    db["devices"][device_id]["block_reason"] = reason
+    db["devices"][device_id]["blocked_at"] = now_iso()
     db["devices"][device_id]["last_seen"] = now_iso()
     save_db(db)
-    return {"ok": True, "device_id": device_id, "blocked": True}
+    return {"ok": True, "device_id": device_id, "blocked": True, "block_reason": reason}
 
 
 @app.post("/admin/unblock/{device_id}")
@@ -470,7 +491,7 @@ def admin_unblock(device_id: str, x_admin_token: str | None = Header(default=Non
                 cur.execute(
                     """
                     UPDATE devices
-                    SET blocked = FALSE, last_seen = NOW()
+                    SET blocked = FALSE, block_reason = '', blocked_at = NULL, last_seen = NOW()
                     WHERE device_id = %s
                     RETURNING device_id
                     """,
@@ -486,6 +507,8 @@ def admin_unblock(device_id: str, x_admin_token: str | None = Header(default=Non
     if device_id not in db["devices"]:
         raise HTTPException(status_code=404, detail="Dispositivo nao encontrado.")
     db["devices"][device_id]["blocked"] = False
+    db["devices"][device_id]["block_reason"] = ""
+    db["devices"][device_id]["blocked_at"] = None
     db["devices"][device_id]["last_seen"] = now_iso()
     save_db(db)
     return {"ok": True, "device_id": device_id, "blocked": False}

@@ -541,11 +541,12 @@ class GuideAppApi:
                 raw = resp.read().decode("utf-8")
                 data = json.loads(raw or "{}")
             blocked = bool(data.get("blocked", False))
+            block_reason = str(data.get("block_reason", "")).strip()
             with self._license_lock:
                 self._license_connected = True
                 self._license_blocked = blocked
                 self._license_message = (
-                    "Licenca bloqueada pelo administrador."
+                    (f"Licenca bloqueada: {block_reason}" if block_reason else "Licenca bloqueada pelo administrador.")
                     if blocked
                     else "Licenca validada."
                 )
