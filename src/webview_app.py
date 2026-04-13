@@ -49,6 +49,9 @@ class _LazyGuideAppApi:
     def lookup_item(self, patrimony):
         return self._get_api().lookup_item(patrimony)
 
+    def get_profiles(self):
+        return self._get_api().get_profiles()
+
     def print_guides(self, payload):
         return self._get_api().print_guides(payload)
 

@@ -23,6 +23,8 @@
   --radius-xl: 28px;
   --radius-lg: 22px;
   --radius-md: 16px;
+  --hero-profile-image: url("./assets/tai_lung__kung_fu_panda____wallpaper___g3anzera_by_reysosen_dfz4k15.png");
+  --profile-accent: #114c78;
 }
 
 * { box-sizing: border-box; }
@@ -246,7 +248,11 @@ body.mode-ambos {
   background:
     radial-gradient(circle at top right, rgba(208, 228, 242, 0.22), transparent 24%),
     radial-gradient(circle at 24% 18%, rgba(255, 213, 177, 0.14), transparent 26%),
-    linear-gradient(135deg, #112838 0%, #193d56 44%, #0f5a78 100%);
+    linear-gradient(132deg, rgba(10, 29, 42, 0.82), rgba(15, 65, 90, 0.74)),
+    var(--hero-profile-image);
+  background-size: auto, auto, auto, cover;
+  background-position: center, center, center, center;
+  background-repeat: no-repeat;
 }
 
 .hero-sonic {
@@ -339,6 +345,44 @@ body.mode-ambos {
   color: rgba(233, 240, 246, 0.9);
   font-size: 0.92rem;
   line-height: 1.42;
+}
+
+.profile-switch {
+  margin-top: 10px;
+}
+
+.profile-switch__label {
+  color: rgba(231, 239, 246, 0.76);
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+.profile-switch__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.profile-pill {
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.08);
+  color: #eff7ff;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.profile-pill.is-active {
+  border-color: rgba(175, 224, 255, 0.55);
+  background: linear-gradient(180deg, rgba(230, 245, 255, 0.95), rgba(180, 219, 245, 0.9));
+  color: var(--profile-accent);
+  box-shadow: inset 0 0 0 1px var(--profile-accent);
 }
 
 .hero__microcopy {
@@ -651,7 +695,8 @@ body.mode-ambos {
 
 .layout {
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .workspace-grid {
@@ -662,9 +707,13 @@ body.mode-ambos {
   align-content: start;
   align-items: start;
   padding-right: 4px;
+  overflow-x: hidden;
 }
 
 .workspace-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 8;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -672,16 +721,19 @@ body.mode-ambos {
   background:
     radial-gradient(circle at top right, rgba(214, 231, 242, 0.82), transparent 34%),
     linear-gradient(180deg, rgba(250, 253, 255, 0.92), rgba(243, 238, 231, 0.78));
+  min-width: 0;
 }
 
 .toolbar-group {
   display: flex;
   align-items: center;
   gap: 14px;
+  min-width: 0;
 }
 
 .toolbar-group--mode {
   flex: 1;
+  min-width: 0;
 }
 
 .toolbar-label {
@@ -695,6 +747,8 @@ body.mode-ambos {
 .toolbar-note {
   color: var(--muted);
   font-size: 0.88rem;
+  min-width: 0;
+  text-align: right;
 }
 
 .card,
@@ -1528,14 +1582,29 @@ body.mode-entrega .hero {
   background:
     radial-gradient(circle at top right, rgba(197, 242, 233, 0.18), transparent 24%),
     radial-gradient(circle at 24% 18%, rgba(190, 255, 235, 0.12), transparent 26%),
-    linear-gradient(135deg, #103235 0%, #145756 44%, #0f7c78 100%);
+    linear-gradient(132deg, rgba(11, 47, 46, 0.78), rgba(15, 124, 120, 0.65)),
+    var(--hero-profile-image);
+  background-size: auto, auto, auto, cover;
+  background-position: center, center, center, center;
+  background-repeat: no-repeat;
 }
 
 body.mode-recebimento .hero {
   background:
     radial-gradient(circle at top right, rgba(250, 215, 186, 0.16), transparent 24%),
     radial-gradient(circle at 24% 18%, rgba(255, 226, 196, 0.12), transparent 26%),
-    linear-gradient(135deg, #3a2517 0%, #6d3f22 44%, #9b5b2a 100%);
+    linear-gradient(132deg, rgba(44, 27, 16, 0.78), rgba(117, 68, 33, 0.68)),
+    var(--hero-profile-image);
+  background-size: auto, auto, auto, cover;
+  background-position: center, center, center, center;
+  background-repeat: no-repeat;
+}
+
+.hero-guide-floating,
+.hero-guide-step,
+.hero-guide-floating__title,
+.hero-guide-floating__list {
+  display: none !important;
 }
 
 .actionbar {

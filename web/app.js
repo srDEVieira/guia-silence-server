@@ -3,6 +3,12 @@ const state = {
   mode: 'ambos',
   maxItemRows: 21,
   patrimonyLength: 5,
+  licenseBlocked: false,
+  licenseMessage: '',
+  licenseConnected: false,
+  licenseHeartbeatId: null,
+  profiles: [],
+  activeProfileId: '',
   autosaveTimer: null,
   collapsedCards: new Set(),
   printHistory: [],
@@ -17,6 +23,7 @@ const els = {};
 const DRAFT_STORAGE_KEY = 'guide-draft-v2';
 const HISTORY_STORAGE_KEY = 'guide-print-history-v1';
 const HISTORY_LIMIT = 8;
+const PROFILE_STORAGE_KEY = 'guide-active-profile-v1';
 
 window.addEventListener('pywebviewready', () => {
   state.apiReady = true;
@@ -31,6 +38,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   } else {
     loadInitialState();
   }
+  startLicenseHeartbeat();
   window.addEventListener('resize', syncModeThumb);
   hideStartupOverlay();
 });
@@ -87,6 +95,8 @@ function cacheElements() {
     core: document.querySelector('[data-guide-step="core"]'),
     items: document.querySelector('[data-guide-step="items"]'),
   };
+  els.profileSwitch = document.getElementById('profile-switch');
+  els.profileList = document.getElementById('profile-list');
   els.collapseButtons = Array.from(document.querySelectorAll('[data-collapse-target]'));
 }
 
@@ -183,6 +193,7 @@ function applyInitialState(result) {
   state.maxItemRows = result.maxItemRows;
   state.patrimonyLength = result.patrimonyLength || 5;
   syncInventoryStatus(result);
+  syncLicenseStatus(result);
 
   fillPrinters(result.printers || [], result.defaultPrinter || '');
   hydratePrintHistory();
@@ -208,6 +219,70 @@ function applyInitialState(result) {
     setStatus('Sistema pronto para preenchimento e impressão.');
   }
   refreshPrintersSilently();
+  loadProfiles();
+}
+
+async function loadProfiles() {
+  if (!state.apiReady || !window.pywebview || !window.pywebview.api || !window.pywebview.api.get_profiles) {
+    return;
+  }
+  try {
+    const response = await window.pywebview.api.get_profiles();
+    const profiles = Array.isArray(response && response.profiles) ? response.profiles : [];
+    state.profiles = profiles.filter((p) => p && p.profile_id && p.display_name);
+    renderProfiles();
+  } catch {
+    // keep default profile button
+  }
+}
+
+function renderProfiles() {
+  if (!els.profileList) return;
+  if (!state.profiles.length) {
+    applyProfileTheme(null);
+    return;
+  }
+
+  const savedProfileId = window.localStorage.getItem(PROFILE_STORAGE_KEY) || '';
+  let activeId = state.activeProfileId || savedProfileId;
+  if (!state.profiles.some((p) => p.profile_id === activeId)) {
+    activeId = state.profiles[0].profile_id;
+  }
+  state.activeProfileId = activeId;
+
+  els.profileList.innerHTML = '';
+  state.profiles.forEach((profile) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'profile-pill';
+    if (profile.profile_id === activeId) {
+      button.classList.add('is-active');
+    }
+    button.textContent = profile.display_name;
+    button.addEventListener('click', () => {
+      state.activeProfileId = profile.profile_id;
+      try {
+        window.localStorage.setItem(PROFILE_STORAGE_KEY, state.activeProfileId);
+      } catch {}
+      renderProfiles();
+      applyProfileTheme(profile);
+    });
+    els.profileList.appendChild(button);
+  });
+
+  const activeProfile = state.profiles.find((p) => p.profile_id === activeId) || null;
+  applyProfileTheme(activeProfile);
+}
+
+function applyProfileTheme(profile) {
+  const defaultHero = 'url("./assets/tai_lung__kung_fu_panda____wallpaper___g3anzera_by_reysosen_dfz4k15.png")';
+  const heroBgUrl = profile && profile.hero_bg_url ? profile.hero_bg_url : '';
+  const accentColor = profile && profile.accent_color ? profile.accent_color : '#114c78';
+  document.documentElement.style.setProperty(
+    '--hero-profile-image',
+    heroBgUrl ? `url("${heroBgUrl.replaceAll('"', '\\"')}")` : defaultHero
+  );
+  document.documentElement.style.setProperty('--profile-accent', accentColor);
 }
 
 function fillPrinters(printers, defaultPrinter) {
@@ -240,6 +315,7 @@ async function refreshPrinters() {
   const result = await window.pywebview.api.refresh_printers();
   fillPrinters(result.printers || [], result.defaultPrinter || '');
   syncInventoryStatus(result);
+  syncLicenseStatus(result);
   updatePrintReadiness();
   scheduleDraftSave();
   setStatus('Impressoras atualizadas.');
@@ -251,6 +327,7 @@ async function refreshPrintersSilently() {
     const result = await window.pywebview.api.refresh_printers();
     fillPrinters(result.printers || [], result.defaultPrinter || '');
     syncInventoryStatus(result);
+    syncLicenseStatus(result);
     updatePrintReadiness();
   } catch {
     // Keep UI responsive even if refresh fails.
@@ -271,6 +348,48 @@ function syncInventoryStatus(result) {
     return;
   }
   els.inventoryStatus.textContent = `${count} chapas carregadas`;
+}
+
+function syncLicenseStatus(result) {
+  const prevBlocked = state.licenseBlocked;
+  const prevMessage = state.licenseMessage;
+  const blocked = Boolean(result && result.licenseBlocked);
+  const connected = Boolean(result && result.licenseConnected);
+  const message = String((result && result.licenseMessage) || '').trim();
+  state.licenseBlocked = blocked;
+  state.licenseConnected = connected;
+  state.licenseMessage = message;
+
+  if (blocked && (!prevBlocked || prevMessage !== message)) {
+    setStatus(message || 'Licenca bloqueada pelo administrador.');
+    toast(message || 'Licenca bloqueada pelo administrador.');
+    return;
+  }
+
+  if (prevBlocked && !blocked) {
+    setStatus('Licenca validada.');
+    toast('Licenca liberada pelo administrador.');
+  }
+}
+
+function startLicenseHeartbeat() {
+  if (state.licenseHeartbeatId) return;
+
+  const tick = async () => {
+    if (!state.apiReady || !window.pywebview || !window.pywebview.api || !window.pywebview.api.get_license_status) {
+      return;
+    }
+    try {
+      const result = await window.pywebview.api.get_license_status();
+      syncLicenseStatus(result);
+      updatePrintReadiness();
+    } catch {
+      // Keep UI stable when connection blips.
+    }
+  };
+
+  tick();
+  state.licenseHeartbeatId = window.setInterval(tick, 5000);
 }
 
 function updateModeUI(animate = true) {
@@ -540,8 +659,11 @@ function updatePrintReadiness() {
   });
 
   if (els.printButton) {
-    els.printButton.disabled = !readiness.ready;
-    els.printButton.title = readiness.ready ? '' : 'Preencha os requisitos para liberar a impressão.';
+    const locked = state.licenseBlocked;
+    els.printButton.disabled = locked || !readiness.ready;
+    els.printButton.title = locked
+      ? (state.licenseMessage || 'Licenca bloqueada pelo administrador.')
+      : (readiness.ready ? '' : 'Preencha os requisitos para liberar a impressão.');
   }
 
   updateFloatingGuide(readiness);

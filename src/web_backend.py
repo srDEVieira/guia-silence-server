@@ -1,39 +1,66 @@
 from __future__ import annotations
 
 from datetime import datetime
+import getpass
+import hashlib
 import importlib
+import json
+import os
 from pathlib import Path
+import platform
 import queue
 import shutil
 import tempfile
 import threading
+import time
 from typing import Any
+from urllib import error, request
 
 
 class GuideAppApi:
     MAX_ITEM_ROWS = 21
     PATRIMONY_LENGTH = 5
     TEMP_PRINT_RETENTION_SECONDS = 20
+    LICENSE_RECHECK_SECONDS = 8
+    LICENSE_BACKGROUND_POLL_SECONDS = 6
+    LICENSE_TIMEOUT_SECONDS = 3
 
     def __init__(self, base_dir: Path | None = None) -> None:
         self.base_dir = (base_dir or Path.cwd()).resolve()
         self.delivery_template = self.base_dir / "Guia solano Entrega.docx"
         self.receipt_template = self.base_dir / "Guia solano Recebimento2.docx"
         self.inventory_base = self.base_dir / "base moveis.xls"
+
         self.inventory_lookup: dict[str, str] = {}
         self._inventory_ready = False
         self._inventory_lock = threading.Lock()
+
         self._printers_cache: list[str] = []
         self._default_printer_cache = ""
         self._printer_lock = threading.Lock()
+
         self._docx_tools_module = None
         self._docx_tools_lock = threading.Lock()
+
+        self.license_server_url = self._load_license_server_url()
+        self._license_lock = threading.Lock()
+        self._license_blocked = False
+        self._license_connected = False
+        self._license_message = "Licenca remota nao configurada."
+        self._license_checked_at = 0.0
+        self._license_device = self._build_device_metadata()
+        self._license_cache_path = self.base_dir / ".license_cache.json"
+        self._load_license_cache()
+
         self._print_queue: queue.Queue[dict[str, Any]] = queue.Queue()
         self._print_worker = threading.Thread(target=self._process_print_queue, daemon=True)
         self._print_worker.start()
+
         threading.Thread(target=self._load_inventory_lookup_background, daemon=True).start()
         threading.Thread(target=self._refresh_printer_cache, daemon=True).start()
         threading.Thread(target=self._warmup_word_automation_background, daemon=True).start()
+        threading.Thread(target=self._refresh_license_status, kwargs={"force": True}, daemon=True).start()
+        threading.Thread(target=self._license_poll_loop, daemon=True).start()
 
     def _docx_tools(self):
         with self._docx_tools_lock:
@@ -42,12 +69,18 @@ class GuideAppApi:
             return self._docx_tools_module
 
     def get_initial_state(self) -> dict[str, Any]:
+        self._refresh_license_status(force=False)
+
         with self._printer_lock:
             printers = list(self._printers_cache)
             default_printer = self._default_printer_cache
         with self._inventory_lock:
             inventory_count = len(self.inventory_lookup)
             inventory_ready = self._inventory_ready
+        with self._license_lock:
+            license_blocked = self._license_blocked
+            license_connected = self._license_connected
+            license_message = self._license_message
 
         return {
             "ok": True,
@@ -62,16 +95,27 @@ class GuideAppApi:
             "inventoryReady": inventory_ready,
             "printers": printers,
             "defaultPrinter": default_printer,
+            "licenseBlocked": license_blocked,
+            "licenseConnected": license_connected,
+            "licenseMessage": license_message,
+            "deviceId": self._license_device["device_id"],
         }
 
     def refresh_printers(self) -> dict[str, Any]:
+        self._refresh_license_status(force=False)
         self._refresh_printer_cache()
+
         with self._printer_lock:
             printers = list(self._printers_cache)
             default_printer = self._default_printer_cache
         with self._inventory_lock:
             inventory_count = len(self.inventory_lookup)
             inventory_ready = self._inventory_ready
+        with self._license_lock:
+            license_blocked = self._license_blocked
+            license_connected = self._license_connected
+            license_message = self._license_message
+
         return {
             "ok": True,
             "printers": printers,
@@ -79,7 +123,20 @@ class GuideAppApi:
             "inventoryBaseFound": self.inventory_base.is_file(),
             "inventoryCount": inventory_count,
             "inventoryReady": inventory_ready,
+            "licenseBlocked": license_blocked,
+            "licenseConnected": license_connected,
+            "licenseMessage": license_message,
         }
+
+    def get_license_status(self) -> dict[str, Any]:
+        self._refresh_license_status(force=False)
+        with self._license_lock:
+            return {
+                "ok": True,
+                "licenseBlocked": self._license_blocked,
+                "licenseConnected": self._license_connected,
+                "licenseMessage": self._license_message,
+            }
 
     def lookup_item(self, patrimony: str) -> dict[str, Any]:
         key = self._docx_tools().normalize_patrimony(patrimony)
@@ -88,13 +145,38 @@ class GuideAppApi:
             "description": self.inventory_lookup.get(key, ""),
         }
 
+    def get_profiles(self) -> dict[str, Any]:
+        if not self.license_server_url:
+            return {"ok": True, "profiles": []}
+
+        endpoint = f"{self.license_server_url}/profiles"
+        req = request.Request(endpoint, method="GET")
+        try:
+            with request.urlopen(req, timeout=self.LICENSE_TIMEOUT_SECONDS) as resp:
+                raw = resp.read().decode("utf-8")
+                data = json.loads(raw or "{}")
+            profiles = data.get("profiles", [])
+            if not isinstance(profiles, list):
+                profiles = []
+            return {"ok": True, "profiles": profiles}
+        except Exception:
+            return {"ok": False, "profiles": []}
+
     def print_guides(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:
+            self._refresh_license_status(force=True)
+            with self._license_lock:
+                if self._license_blocked:
+                    raise ValueError(
+                        self._license_message
+                        or "Uso bloqueado remotamente. Entre em contato com o administrador."
+                    )
+
             normalized = self._normalize_payload(payload)
             self._print_queue.put(normalized)
             return {
                 "ok": True,
-                "message": "Impressão enviada para a fila.",
+                "message": "Impressao enviada para a fila.",
             }
         except Exception as exc:
             return {
@@ -138,10 +220,18 @@ class GuideAppApi:
         except Exception:
             pass
 
+    def _license_poll_loop(self) -> None:
+        while True:
+            try:
+                self._refresh_license_status(force=False)
+            except Exception:
+                pass
+            time.sleep(self.LICENSE_BACKGROUND_POLL_SECONDS)
+
     def _normalize_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         mode = str(payload.get("mode", "ambos")).strip() or "ambos"
         if mode not in {"entrega", "recebimento", "ambos"}:
-            raise ValueError("Modo de geração inválido.")
+            raise ValueError("Modo de geracao invalido.")
 
         printer_name = str(payload.get("printerName", "")).strip()
         if not printer_name:
@@ -151,9 +241,9 @@ class GuideAppApi:
         try:
             copies = int(copies_raw)
         except (TypeError, ValueError):
-            raise ValueError("Informe um número inteiro de cópias.")
+            raise ValueError("Informe um numero inteiro de copias.")
         if copies < 1:
-            raise ValueError("A quantidade de cópias deve ser pelo menos 1.")
+            raise ValueError("A quantidade de copias deve ser pelo menos 1.")
 
         allow_modifiable_guides = bool(payload.get("allowModifiableGuides"))
 
@@ -175,7 +265,7 @@ class GuideAppApi:
 
         if mode in {"entrega", "ambos"}:
             if not self.delivery_template.is_file():
-                raise ValueError("Modelo de entrega não encontrado.")
+                raise ValueError("Modelo de entrega nao encontrado.")
             if not delivery_receiver_unit:
                 raise ValueError("Informe a UA Receptora da guia de entrega.")
             if delivery_items and not delivery_room:
@@ -185,7 +275,7 @@ class GuideAppApi:
 
         if mode in {"recebimento", "ambos"}:
             if not self.receipt_template.is_file():
-                raise ValueError("Modelo de recebimento não encontrado.")
+                raise ValueError("Modelo de recebimento nao encontrado.")
             if not receipt_sender_unit:
                 raise ValueError("Informe a UA Remetente da guia de recebimento.")
             if receipt_items and not receipt_room:
@@ -226,16 +316,16 @@ class GuideAppApi:
             if not patrimony and not description:
                 continue
             if not description:
-                raise ValueError(f"Cada linha de {label} precisa ter descrição.")
+                raise ValueError(f"Cada linha de {label} precisa ter descricao.")
             if not patrimony and not allow_modifiable_guides:
                 raise ValueError(
-                    f"Cada linha de {label} precisa ter patrimônio, ou ative a guia modificável."
+                    f"Cada linha de {label} precisa ter patrimonio, ou ative a guia modificavel."
                 )
 
             normalized.append((patrimony, description))
 
         if len(normalized) > self.MAX_ITEM_ROWS:
-            raise ValueError(f"A guia de {label} aceita no máximo {self.MAX_ITEM_ROWS} linhas.")
+            raise ValueError(f"A guia de {label} aceita no maximo {self.MAX_ITEM_ROWS} linhas.")
 
         return normalized
 
@@ -288,3 +378,109 @@ class GuideAppApi:
             raise
 
         self._schedule_temp_cleanup(working_dir)
+
+    def _load_license_server_url(self) -> str:
+        env_url = os.getenv("LICENSE_SERVER_URL", "").strip()
+        if env_url:
+            return env_url.rstrip("/")
+
+        config_path = self.base_dir / "license_config.json"
+        if not config_path.is_file():
+            return ""
+        try:
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+            return str(data.get("server_url", "")).strip().rstrip("/")
+        except Exception:
+            return ""
+
+    def _build_device_metadata(self) -> dict[str, str]:
+        machine_name = platform.node().strip() or os.getenv("COMPUTERNAME", "").strip() or "unknown-machine"
+        user_name = getpass.getuser().strip() or os.getenv("USERNAME", "").strip() or "unknown-user"
+        source = f"{machine_name}|{user_name}".encode("utf-8", errors="ignore")
+        device_id = hashlib.sha256(source).hexdigest()[:32]
+        return {
+            "device_id": device_id,
+            "machine_name": machine_name,
+            "user_name": user_name,
+        }
+
+    def _load_license_cache(self) -> None:
+        if not self._license_cache_path.is_file():
+            return
+        try:
+            data = json.loads(self._license_cache_path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        with self._license_lock:
+            self._license_blocked = bool(data.get("blocked", False))
+            self._license_connected = bool(data.get("connected", False))
+            self._license_message = str(data.get("message", self._license_message))
+            self._license_checked_at = float(data.get("checked_at", 0.0))
+
+    def _save_license_cache(self) -> None:
+        with self._license_lock:
+            payload = {
+                "blocked": self._license_blocked,
+                "connected": self._license_connected,
+                "message": self._license_message,
+                "checked_at": self._license_checked_at,
+            }
+        try:
+            self._license_cache_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    def _refresh_license_status(self, *, force: bool = False) -> None:
+        now = time.time()
+        with self._license_lock:
+            if not force and (now - self._license_checked_at) < self.LICENSE_RECHECK_SECONDS:
+                return
+
+        if not self.license_server_url:
+            with self._license_lock:
+                self._license_connected = False
+                self._license_blocked = False
+                self._license_message = "Licenca remota nao configurada."
+                self._license_checked_at = now
+            self._save_license_cache()
+            return
+
+        endpoint = f"{self.license_server_url}/register"
+        payload_bytes = json.dumps(self._license_device).encode("utf-8")
+        req = request.Request(
+            endpoint,
+            data=payload_bytes,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        try:
+            with request.urlopen(req, timeout=self.LICENSE_TIMEOUT_SECONDS) as resp:
+                raw = resp.read().decode("utf-8")
+                data = json.loads(raw or "{}")
+            blocked = bool(data.get("blocked", False))
+            with self._license_lock:
+                self._license_connected = True
+                self._license_blocked = blocked
+                self._license_message = (
+                    "Licenca bloqueada pelo administrador."
+                    if blocked
+                    else "Licenca validada."
+                )
+                self._license_checked_at = now
+            self._save_license_cache()
+        except (error.URLError, TimeoutError, ValueError, json.JSONDecodeError):
+            with self._license_lock:
+                was_blocked = self._license_blocked
+                self._license_connected = False
+                self._license_blocked = was_blocked
+                self._license_message = (
+                    "Licenca bloqueada (cache local)."
+                    if was_blocked
+                    else "Servidor de licenca indisponivel."
+                )
+                self._license_checked_at = now
+            self._save_license_cache()
