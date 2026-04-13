@@ -1,4 +1,4 @@
-{
-  "base_url": "https://guia-silence-server.onrender.com",
-  "admin_token": "12345"
+﻿{
+    "admin_token":  "12345",
+    "base_url":  "https://guia-silence-serveronrender.com"
 }

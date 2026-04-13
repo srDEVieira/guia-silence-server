@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -12,6 +14,26 @@ from tkinter import messagebox, simpledialog, ttk
 
 ROOT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT_DIR / "admin_panel_config.json"
+
+
+def _ensure_tk_runtime() -> None:
+    if os.name != "nt":
+        return
+    if os.getenv("TCL_LIBRARY") and os.getenv("TK_LIBRARY"):
+        return
+
+    candidates = [
+        Path(sys.base_prefix) / "tcl",
+        Path(sys.executable).resolve().parent.parent / "tcl",
+        Path.home() / "AppData" / "Local" / "Programs" / "Python" / "Python313" / "tcl",
+    ]
+    for base in candidates:
+        tcl_dir = base / "tcl8.6"
+        tk_dir = base / "tk8.6"
+        if tcl_dir.is_dir() and tk_dir.is_dir():
+            os.environ.setdefault("TCL_LIBRARY", str(tcl_dir))
+            os.environ.setdefault("TK_LIBRARY", str(tk_dir))
+            return
 
 
 class AdminPanelApp:
@@ -418,6 +440,7 @@ class AdminPanelApp:
 
 
 def main() -> None:
+    _ensure_tk_runtime()
     root = tk.Tk()
     style = ttk.Style(root)
     try:
